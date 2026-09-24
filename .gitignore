@@ -1,0 +1,39 @@
+# Secrets — never commit
+.env
+.env.local
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Node (bots/video)
+node_modules/
+dist/
+build/
+
+# DB journals (engine.db is committed as backup)
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Raw logs (gitignored; only aggregated/summary committed)
+logs/raw/
+logs/chat/raw/
+logs/runs/raw/
+
+# Cache directories
+.hyperframes-cache/
+.hf-cache/
+*.tmp
+*.log
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Dashboard runtime (regenerated on each run)
+dashboard/data.json

@@ -1,0 +1,118 @@
+# Конфигурация движка
+# Все секреты — только в .env, здесь — несекретные параметры.
+
+project:
+  name: "Daily Vibe Coding Ideas and Specs"
+  slug: "daily-vibe-coding-ideas-and-specs"
+  timezone: "Europe/Moscow"
+  languages:
+    publish: [en]
+    internal: [ru]
+
+engine:
+  min_items_per_day: 30
+  max_items_per_day: 80
+  min_ideas_per_day: 5
+  run_mode: batch            # batch | incremental
+  retries: 3
+  backoff_seconds: 30
+
+models:
+  cheap: "opencode/default"      # fetch, annotate, OCR
+  medium: "opencode/default"     # clustering, summaries
+  expensive: "opencode/default"  # synthesis, deep specs
+
+sources:
+  github_trending: true
+  github_search_topics: ["vibe-coding", "ai-agents", "llm", "mcp", "ai-tools"]
+  hackernews: true
+  producthunt: false             # требует ключ
+  reddit_rss: ["r/vibecoding", "r/artificial", "r/SideProject", "r/ChatGPTCoding"]
+  npm_weekly: true
+  rss_blogs:
+    - "https://github.blog/feed/"
+    - "https://openai.com/blog/rss.xml"
+    - "https://www.anthropic.com/news/rss.xml"
+    - "https://vercel.com/blog/rss.xml"
+
+publish:
+  channels:
+    - id: github_pages
+      level: A                 # A=авто, B=одобрение, C=ручные пакеты
+      enabled: true
+    - id: cloudflare_pages
+      level: A
+      enabled: true
+      subdomain: "daily-vibe-coding-ideas-and-specs.pages.dev"
+    - id: web_push
+      level: A
+      enabled: false           # Фаза 2 (VAPID: публичный ключ в конфиге, приватный — в .env)
+    - id: wordpress
+      level: A
+      enabled: false           # Фаза 2
+    - id: telegram_channel
+      level: A
+      enabled: false           # Фаза 2
+    - id: linkedin
+      level: A
+      enabled: false           # Фаза 2
+    - id: bluesky
+      level: A
+      enabled: false           # Фаза 2
+    - id: vk
+      level: A
+      enabled: false           # Фаза 2
+    - id: x
+      level: C
+      enabled: false
+    - id: reddit
+      level: C
+      enabled: false
+    - id: quora
+      level: C
+      enabled: false
+    - id: youtube
+      level: B
+      enabled: false           # Фаза 3
+    - id: tiktok
+      level: B
+      enabled: false           # Фаза 3
+
+validate:
+  require_all: true            # публикация только после всех зелёных чеков
+  link_check_timeout_s: 10
+
+media:
+  card_formats: ["og", "social", "carousel", "thumbnail"]
+  carousel_slides: [hook, problem, idea, spec, market_fit, cta]
+  video_ratios: ["9:16", "16:9", "1:1"]
+
+index:
+  rebuild_after_every_run: true
+  idea_index: true             # свой INDEX.md на каждую идею
+
+crawl:
+  user_agent: "DailyVibeEngine/0.1 (+https://github.com/daily-vibe-coding-ideas-and-specs)"
+  default_delay_s: 1
+  max_urls_per_sitemap: 500
+  timeout_s: 15
+  ref_sites:            # сайты-референсы для синтеза идей (sitemap+robots)
+    - "https://github.blog"
+    - "https://openai.com"
+    - "https://www.anthropic.com"
+    - "https://vercel.com/blog"
+    - "https://www.typescriptlang.org"
+    - "https://bun.sh"
+
+knowledge:
+  services_dir: "knowledge/services"
+  auto_index_on_run: true
+
+cache:
+  llm_enabled: true
+  llm_path: "db/llm_cache.sqlite"
+
+schedule:
+  daily_run_time: "11:00"
+  weekly_frameworks_update: "mon 10:00"
+  weekly_report: "mon 18:00"

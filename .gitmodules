@@ -1,0 +1,7 @@
+[submodule "frameworks/spec-kit"]
+	path = frameworks/spec-kit
+	url = https://github.com/github/spec-kit.git
+
+[submodule "frameworks/bmad-method"]
+	path = frameworks/bmad-method
+	url = https://github.com/bmad-code-org/BMAD-METHOD.git

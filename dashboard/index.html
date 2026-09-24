@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Daily Vibe Coding Ideas — dashboard</title>
+  <style>
+    body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #0f1115; color: #e6e6e6; margin: 0; padding: 40px; }
+    h1 { font-size: 20px; }
+    .card { background: #161a22; border: 1px solid #262d3a; border-radius: 8px; padding: 16px 20px; margin-bottom: 12px; }
+    .muted { color: #8a93a3; }
+    #counts { display: flex; gap: 24px; flex-wrap: wrap; }
+    .stat b { font-size: 28px; display: block; }
+  </style>
+</head>
+<body>
+  <h1>Daily Vibe Coding Ideas and Specs — dashboard</h1>
+  <p class="muted">Фаза 0: заглушка. Данные появятся после первых прогонов движка.</p>
+  <div id="counts" class="card"></div>
+  <script>
+    fetch("data.json").then(r => r.json()).then(d => {
+      const c = d.counts || {};
+      const el = document.getElementById("counts");
+      el.innerHTML = Object.entries(c).map(([k, v]) =>
+        `<div class="stat"><b>${v}</b>${k}</div>`).join("");
+    });
+  </script>
+</body>
+</html>
