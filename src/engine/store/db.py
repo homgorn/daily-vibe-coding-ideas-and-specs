@@ -194,7 +194,9 @@ MIGRATIONS: list[tuple[int, str]] = [
 ]
 
 
-def get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
+def get_conn(db_path: Path | None = None) -> sqlite3.Connection:
+    if db_path is None:
+        db_path = DB_PATH
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -217,7 +219,9 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
-def init_db(db_path: Path = DB_PATH) -> sqlite3.Connection:
+def init_db(db_path: Path | None = None) -> sqlite3.Connection:
+    if db_path is None:
+        db_path = DB_PATH
     conn = get_conn(db_path)
     migrate(conn)
     return conn

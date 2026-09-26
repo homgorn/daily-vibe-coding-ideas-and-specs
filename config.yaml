@@ -116,3 +116,11 @@ schedule:
   daily_run_time: "11:00"
   weekly_frameworks_update: "mon 10:00"
   weekly_report: "mon 18:00"
+
+site:
+  base_url: "https://example.com"   # TODO: заменить на реальный URL (github.io/<repo> или домен) перед публикацией
+  title: "Daily Vibe Coding Ideas & Specs"
+  tagline: "Fresh vibe-coding product ideas every day, with viability scores and agent-ready specs."
+  language: "en"
+  github_url: "https://github.com/daily-vibe-coding-ideas-and-specs"
+  items_per_feed: 20
