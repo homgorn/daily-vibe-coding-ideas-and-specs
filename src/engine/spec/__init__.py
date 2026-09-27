@@ -131,7 +131,11 @@ MAX_GROUP_ATTEMPTS = 2
 
 SPEC_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Problem and value", ("problem", "solution", "target_user", "features")),
-    ("Architecture", ("tech_stack", "data_model", "api", "ui_ux")),
+    # Measured 2026-09-27: the four architecture sections as one group were
+    # still truncated at max_tokens=3200, twice in a row, because tech_stack
+    # and api make the model emit large code blocks. Two sections each fit.
+    ("Stack and data", ("tech_stack", "data_model")),
+    ("Interfaces and UX", ("api", "ui_ux")),
     ("Shipping", ("monetization", "risks", "launch_checklist", "cited_sources")),
 )
 
