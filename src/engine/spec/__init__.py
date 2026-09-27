@@ -325,7 +325,48 @@ def generate_spec(idea: dict, cluster_items: list[dict]) -> str:
     )
 
 
+INCOMPLETE_MARKER = "(not provided by model)"
+
+
+def spec_is_incomplete(spec_path: str | Path) -> bool:
+    """True when a stored spec still has sections the model never filled in.
+
+    The `specs` table records only a path, so completeness is a property of the
+    file. The pipeline and the repair tooling must agree on the definition, or
+    the tool can report a spec as clean while the pipeline keeps skipping it.
+    """
+    path = Path(spec_path)
+    if not path.exists():
+        return True
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return FALLBACK_MARKER in text or INCOMPLETE_MARKER in text
+
+
+def select_ideas_needing_specs(conn) -> list[int]:
+    """Ideas that have no spec, or whose spec is missing/incomplete on disk.
+
+    Selecting only `specs.id IS NULL` made a partial spec permanent: the row
+    existed, so the idea was never retried, and the artifact stayed broken
+    forever with no way for the pipeline to heal it.
+    """
+    rows = conn.execute("""
+        SELECT i.id AS id, s.path AS spec_path
+        FROM ideas i
+        LEFT JOIN specs s ON i.id = s.idea_id
+        WHERE i.status IN ('new', 'watching', 'spec')
+        ORDER BY i.id
+    """).fetchall()
+    return [
+        row["id"]
+        for row in rows
+        if not row["spec_path"] or spec_is_incomplete(row["spec_path"])
+    ]
+
+
 def save_spec(conn, idea_id: int, spec_path: str) -> int:
+    # Regeneration is routine now that incomplete specs are retried, so the
+    # write must be idempotent: one row per idea, not one per attempt.
+    conn.execute("DELETE FROM specs WHERE idea_id = ?", (idea_id,))
     cur = conn.execute(
         "INSERT INTO specs (idea_id, path, status, created_at) VALUES (?, ?, 'draft', datetime('now'))",
         (idea_id, spec_path),
@@ -338,12 +379,7 @@ def run_spec_generation(config: dict, idea_ids: list[int] | None = None) -> dict
     conn = init_db()
 
     if idea_ids is None:
-        rows = conn.execute("""
-            SELECT i.id FROM ideas i
-            LEFT JOIN specs s ON i.id = s.idea_id
-            WHERE i.status IN ('new', 'watching') AND s.id IS NULL
-        """).fetchall()
-        idea_ids = [r["id"] for r in rows]
+        idea_ids = select_ideas_needing_specs(conn)
 
     if not idea_ids:
         return {"specs": 0, "message": "No ideas to spec"}
