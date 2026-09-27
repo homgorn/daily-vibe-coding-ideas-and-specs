@@ -249,10 +249,27 @@ def generate_spec(idea: dict, cluster_items: list[dict]) -> str:
                 for key, heading in SPEC_SECTIONS
                 if key in outstanding
             }
+            # A retry must be a *different request*, not a replay. Measured
+            # 2026-09-27: 30 of 85 cached responses were truncated, and
+            # because the cache served them back verbatim, every retry got the
+            # identical broken text and a group could never recover. The
+            # attempt marker changes the prompt, and cache=False keeps the
+            # answer out of the cache so a bad one cannot be replayed later.
+            retry_note = (
+                ""
+                if attempt == 0
+                else (
+                    f"\nThis is attempt {attempt + 1}. Your previous answer was "
+                    f"cut off before the JSON closed. Be markedly shorter this "
+                    f"time: drop code blocks, keep each section under 120 "
+                    f"words, and make sure the final }} is present.\n"
+                )
+            )
             prompt = (
                 f"{prompt_head}\n"
                 f"## Task\n"
-                f"Write ONLY these sections of the spec: {group_name}.\n\n"
+                f"Write ONLY these sections of the spec: {group_name}.\n"
+                f"{retry_note}\n"
                 f"## Required Output Format\n"
                 f"Return ONLY a JSON object with exactly these keys and no "
                 f"others: "
@@ -267,7 +284,7 @@ def generate_spec(idea: dict, cluster_items: list[dict]) -> str:
                 f"{grounding}"
             )
             try:
-                response = complete(prompt, stage="expensive")
+                response = complete(prompt, stage="expensive", cache=False)
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"{group_name}: {exc}")
                 break

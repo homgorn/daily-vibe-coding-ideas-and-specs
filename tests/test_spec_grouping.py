@@ -220,6 +220,47 @@ def test_retry_asks_only_for_missing_keys(monkeypatch):
     assert "not provided by model" not in out
 
 
+def test_spec_calls_are_not_memoized(monkeypatch):
+    """Spec calls must bypass the cache.
+
+    Measured: 30 of 85 cached responses were truncated. A memoized truncated
+    response is replayed verbatim, so every retry got the same broken text and
+    the group could never recover.
+    """
+    seen: list[dict] = []
+
+    def record(prompt, stage=None, **kwargs):
+        seen.append(kwargs)
+        keys = requested_keys(prompt)
+        payload = {key: f"## {key.upper()}\\n\\nbody" for key in keys}
+        return LLMResponse(content=json.dumps(payload), model="m")
+
+    monkeypatch.setattr(spec_mod, "complete", record)
+    spec_mod.generate_spec(IDEA, ITEMS)
+    assert seen, "no calls recorded"
+    for kwargs in seen:
+        assert kwargs.get("cache") is False, "spec calls must not read/write the cache"
+
+
+def test_retry_prompt_differs_from_the_first_attempt(monkeypatch):
+    """A retry must be a different request, not a verbatim replay."""
+    prompts: list[str] = []
+
+    def truncated_once(prompt, stage=None, **kwargs):
+        prompts.append(prompt)
+        keys = requested_keys(prompt)
+        if len(prompts) == 1:
+            return LLMResponse(content='{"problem": "## Problem\\n\\ncut', model="m")
+        payload = {key: f"## {key.upper()}\\n\\nbody" for key in keys}
+        return LLMResponse(content=json.dumps(payload), model="m")
+
+    monkeypatch.setattr(spec_mod, "complete", truncated_once)
+    spec_mod.generate_spec(IDEA, ITEMS)
+    assert len(prompts) >= 2, "expected a retry"
+    assert prompts[0] != prompts[1], "a retry reused the identical prompt"
+    assert "attempt 2" in prompts[1], "the retry should tell the model it failed"
+
+
 def test_retries_are_bounded(monkeypatch):
     """A group that never yields anything must not retry forever."""
     calls = {"n": 0}

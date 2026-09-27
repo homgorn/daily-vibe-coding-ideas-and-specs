@@ -1,6 +1,6 @@
 # Global Index
 
-*Updated: 2026-09-26T21:29:43*
+*Updated: 2026-09-28T01:53:34*
 
 ## Statistics
 
@@ -14,8 +14,8 @@
 
 ## Recent Ideas
 
-- [AI Code Review Bot](ideas/idea_1.md) — **68**/100 — `new` — 2026-09-26
-- [MCP Server Manager](ideas/idea_2.md) — **68**/100 — `spec` — 2026-09-26
+- [AI Code Review Bot](ideas/idea_1.md) — **68**/100 — `new` — 2026-09-27
+- [MCP Server Manager](ideas/idea_2.md) — **68**/100 — `spec` — 2026-09-27
 
 ## Clusters
 
@@ -28,7 +28,7 @@
 
 ## Days
 
-- [2026-09-26](days/2026-09-26.md) (5 items)
+- [2026-09-28](days/2026-09-28.md) (5 items)
 
 ## Navigation
 

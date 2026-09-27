@@ -229,6 +229,8 @@ class ProviderRegistry:
         provider_name = self.config.get("models", {}).get("provider", "mock")
         provider = self.providers.get(provider_name) or self.providers["mock"]
 
+        # `cache` is a registry-level concern, never a provider request kwarg.
+        use_cache = bool(kwargs.pop("cache", True))
         call_kwargs = self._stage_kwargs(stage, kwargs)
         candidates = self.models_for_stage(stage)
         errors: list[str] = []
@@ -237,9 +239,10 @@ class ProviderRegistry:
 
         for model in candidates:
             cache_key = self._cache_key(prompt, model, **call_kwargs)
-            cached = self._get_cached(cache_key)
-            if cached:
-                return cached
+            if use_cache:
+                cached = self._get_cached(cache_key)
+                if cached:
+                    return cached
             if self.budget_exhausted(stage):
                 raise RuntimeError(
                     f"budget exhausted for stage={stage} "
@@ -253,7 +256,8 @@ class ProviderRegistry:
                 errors.append(f"{model}: {exc}")
                 continue
             self._budget_spent[stage] += time.monotonic() - started
-            self._set_cache(cache_key, response)
+            if use_cache:
+                self._set_cache(cache_key, response)
             return response
 
         raise RuntimeError(

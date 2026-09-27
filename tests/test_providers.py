@@ -231,6 +231,74 @@ def test_rate_limit_is_retried():
     assert calls["n"] == 3
 
 
+def test_cache_false_forces_a_fresh_call(tmp_path, monkeypatch):
+    """A cached broken response must not be replayed by the next attempt.
+
+    Measured 2026-09-27: 30 of 85 cached OpenRouter responses were truncated
+    (unclosed brace). Because they were memoized, every retry of the same
+    prompt returned the identical broken text, so a spec group could never
+    recover no matter how many attempts it was allowed.
+    """
+    from engine.providers import LLMResponse, ProviderRegistry
+
+    calls = {"n": 0}
+
+    class Recorder:
+        def complete(self, prompt, model, **kwargs):
+            calls["n"] += 1
+            return LLMResponse(
+                content='{"a": "1"', model=model, usage={"completion_tokens": 5}
+            )
+
+        def list_models(self):
+            return ["m"]
+
+    registry = ProviderRegistry({"models": {"provider": "stub"}})
+    registry.providers["stub"] = Recorder()
+    monkeypatch.setattr(registry, "_init_cache", lambda: None)
+    monkeypatch.setattr(registry, "cache_conn", _sqlite(tmp_path / "c.sqlite"), raising=False)
+
+    for _ in range(3):
+        registry.complete("same prompt", stage="expensive", cache=False)
+    assert calls["n"] == 3, f"cache=False must not memoize: {calls['n']} live calls"
+
+
+def test_cache_true_still_memoizes(tmp_path, monkeypatch):
+    from engine.providers import LLMResponse, ProviderRegistry
+
+    calls = {"n": 0}
+
+    class Recorder:
+        def complete(self, prompt, model, **kwargs):
+            calls["n"] += 1
+            return LLMResponse(content='{"a": "1"}', model=model)
+
+        def list_models(self):
+            return ["m"]
+
+    registry = ProviderRegistry({"models": {"provider": "stub"}})
+    registry.providers["stub"] = Recorder()
+    monkeypatch.setattr(registry, "_init_cache", lambda: None)
+    monkeypatch.setattr(registry, "cache_conn", _sqlite(tmp_path / "c.sqlite"), raising=False)
+
+    registry.complete("same prompt", stage="expensive")
+    registry.complete("same prompt", stage="expensive")
+    assert calls["n"] == 1, "a usable response should still be cached"
+
+
+def _sqlite(path):
+    import sqlite3
+
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS llm_cache ("
+        "key_hash TEXT PRIMARY KEY, prompt TEXT, model TEXT, response TEXT,"
+        " created_at TEXT)"
+    )
+    return conn
+
+
 def test_network_failure_is_not_retried_per_model():
     """A DNS/socket failure hits every model identically — stop the chain at once.
 
