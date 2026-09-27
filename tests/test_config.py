@@ -29,6 +29,8 @@ def test_env_separate_from_config():
     cfg_text = (ROOT / "config.yaml").read_text(encoding="utf-8")
     env = load_env()
     for key, value in env.items():
+        if not value:
+            continue
         if "TOKEN" in key or "KEY" in key or "SECRET" in key:
             assert str(value) not in cfg_text, f"секрет {key} утёк в config.yaml"
 

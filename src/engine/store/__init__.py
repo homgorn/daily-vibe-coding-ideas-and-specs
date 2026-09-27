@@ -62,6 +62,25 @@ def safe_name(text: str, max_len: int = 80) -> str:
     return f"untitled-{digest}"
 
 
+def drop_stale_siblings(path: Path) -> list[Path]:
+    """Remove same-id artifact files next to `path` (slug rules changed over time)."""
+    if not path.parent.exists():
+        return []
+    prefix = path.stem.split("_", 1)[0] + "_"
+    removed = []
+    for sibling in sorted(path.parent.glob(f"{prefix}*.md")):
+        if sibling.name != path.name and sibling.is_file():
+            sibling.unlink()
+            removed.append(sibling)
+    return removed
+
+
+def _base_url() -> str:
+    from engine.config import load_config
+
+    return str(load_config().get("site", {}).get("base_url", "https://example.com")).rstrip("/")
+
+
 def write_note(content: str, title: str, category: str = "general") -> Path:
     """Write a note to data/YYYY-MM-DD/notes/"""
     ensure_dirs()
@@ -110,7 +129,7 @@ viability_score: {viability.get('score', 0)}
 viability_confidence: {viability.get('confidence', 0)}
 status: draft
 origin: research
-canonical: https://example.com/specs/{idea_id}
+canonical: {_base_url()}/specs/{idea_id}
 ---
 """
     # Data mirror
@@ -122,6 +141,9 @@ canonical: https://example.com/specs/{idea_id}
     pub_path = PUBLISH_DIR / "en" / "specs" / f"{idea_id}_{safe_title}.md"
     with pub_path.open("w", encoding="utf-8") as f:
         f.write(frontmatter + "\n" + spec_md)
+
+    drop_stale_siblings(data_path)
+    drop_stale_siblings(pub_path)
 
     return data_path
 
@@ -158,6 +180,9 @@ date: {today}
     pub_path = PUBLISH_DIR / "en" / "ideas" / f"{idea_id}_{safe_title}.md"
     with pub_path.open("w", encoding="utf-8") as f:
         f.write(frontmatter + "\n" + content)
+
+    drop_stale_siblings(data_path)
+    drop_stale_siblings(pub_path)
 
     return data_path
 

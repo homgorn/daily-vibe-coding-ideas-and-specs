@@ -27,77 +27,123 @@ class IngestItem:
     raw: str = ""
 
 
+# Section headings in the inbox that describe how to use the file rather than
+# hold ideas. Parsing them turns the instructions into "ideas".
+INSTRUCTION_SECTIONS = {
+    "правила", "rules", "инструкция", "как пользоваться", "how to use",
+    "формат", "format", "архив", "заархивировано", "archive", "processed",
+}
+
+# Lines that are examples or empty slots, not submissions. Deliberately keyed
+# on prose, not on domains: a real submission may legitimately link example.com.
+PLACEHOLDER_MARKERS = (
+    "пусто", "добавь первую", "placeholder", "твой пример", "your example",
+    "замените", "replace me", "здесь будет", "your link here",
+)
+
+_CHECKBOX_LINE = re.compile(r"^\s*[-*]\s*\[( |x|X)\]\s*(.+)$")
+_URL_ONLY = re.compile(r"^(https?://\S+)$")
+
+
+def _is_placeholder(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in PLACEHOLDER_MARKERS)
+
+
+def _title_from_url(url: str) -> str:
+    tail = url.rstrip("/").rsplit("/", 1)[-1] or url
+    return tail.replace("-", " ").replace("_", " ").strip() or url
+
+
 def parse_inbox() -> list[IngestItem]:
     """Parse ingest/inbox.md for user-submitted items.
 
-    Format:
-    ## Title
-    URL: https://...
-    Description: ...
-    tags: tag1, tag2
+    Two supported shapes, both taken from the inbox's own instructions:
 
-    Or just a URL on its own line.
+    Checklist line (the documented format):
+        - [ ] https://github.com/owner/repo | short description
+
+    Key/value block:
+        ## Title
+        URL: https://...
+        Description: ...
+        tags: tag1, tag2
+
+    Instruction sections, archived entries, and placeholder/example lines are
+    skipped: the template that ships in the repo must not manufacture ideas.
     """
     if not INBOX_PATH.exists():
         return []
 
     content = INBOX_PATH.read_text(encoding="utf-8")
-    items = []
+    items: list[IngestItem] = []
 
-    # Split by ## headings
-    sections = re.split(r"^## ", content, flags=re.MULTILINE)
-    for section in sections[1:]:  # Skip first (before first ##)
+    for section in re.split(r"^## ", content, flags=re.MULTILINE)[1:]:
         lines = section.strip().splitlines()
         if not lines:
             continue
+        heading = lines[0].strip()
+        if heading.lower().strip("# ").strip() in INSTRUCTION_SECTIONS:
+            continue
 
-        title = lines[0].strip()
-        url = None
-        description = ""
-        tags = []
-
+        pending: list[IngestItem] = []
+        kv: dict[str, str] = {}
         for line in lines[1:]:
-            line = line.strip()
-            if not line:
+            stripped = line.strip()
+            if not stripped:
                 continue
 
-            # URL pattern
-            url_match = re.search(r"(https?://\S+)", line)
-            if url_match and not url:
-                url = url_match.group(1)
-
-            # tags: pattern
-            if line.lower().startswith("tags:"):
-                tags_str = line[5:].strip()
-                tags = [t.strip() for t in tags_str.split(",") if t.strip()]
+            checkbox = _CHECKBOX_LINE.match(stripped)
+            if checkbox:
+                body = checkbox.group(2).strip()
+                if _is_placeholder(body):
+                    continue
+                url, _, description = body.partition("|")
+                url = url.strip()
+                description = description.strip()
+                if not _URL_ONLY.match(url):
+                    # Not a link line — treat the whole body as the title.
+                    url, description = "", body
+                pending.append(IngestItem(
+                    title=_title_from_url(url) if url else body[:80],
+                    url=url or None,
+                    description=description,
+                    origin="user",
+                    raw=stripped,
+                ))
                 continue
 
-            # description: pattern
-            if line.lower().startswith(("description:", "desc:")):
-                description = line.split(":", 1)[1].strip()
+            key = stripped.split(":", 1)[0].strip().lower()
+            if key in ("tags", "url", "description", "desc", "title") and ":" in stripped:
+                kv[key] = stripped.split(":", 1)[1].strip()
                 continue
 
-            # Bare URL line
-            if re.match(r"^https?://\S+$", line):
-                if not url:
-                    url = line
+            if _URL_ONLY.match(stripped):
+                kv.setdefault("url", stripped)
                 continue
 
-            # Otherwise accumulate as description
-            if description:
-                description += " " + line
-            else:
-                description = line
+            if not _is_placeholder(stripped):
+                kv.setdefault("description", stripped)
 
-        if title or url:
-            items.append(IngestItem(
-                title=title or (url or "Untitled"),
-                url=url,
-                description=description,
-                origin="user",
-                tags=tags,
-                raw=section.strip(),
-            ))
+        if pending:
+            items.extend(pending)
+            continue
+
+        title = kv.get("title") or heading
+        url = kv.get("url") or ""
+        if not url and not kv.get("description"):
+            continue
+        if _is_placeholder(f"{title} {url} {kv.get('description', '')}"):
+            continue
+        tags = [t.strip() for t in kv.get("tags", "").split(",") if t.strip()]
+        items.append(IngestItem(
+            title=title or _title_from_url(url),
+            url=url or None,
+            description=kv.get("description", ""),
+            origin="user",
+            tags=tags,
+            raw="\n".join(lines).strip(),
+        ))
 
     return items
 

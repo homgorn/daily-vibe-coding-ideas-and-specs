@@ -18,9 +18,45 @@ engine:
   backoff_seconds: 30
 
 models:
-  cheap: "opencode/default"      # fetch, annotate, OCR
-  medium: "opencode/default"     # clustering, summaries
-  expensive: "opencode/default"  # synthesis, deep specs
+  provider: "openrouter"   # mock | openrouter | opencode | openai
+  # Free-tier модели OpenRouter (замеры 2026-09-27, tools/bench_models.py).
+  # Free-пул rate-limited и может стоять в очереди минутами, поэтому:
+  #   1) у каждой стадии есть запасные модели — движок переключается сам
+  #   2) max_tokens ограничены по стадиям (большие лимиты = минуты ожидания)
+  # Проверить свои: python tools/check_models.py  /  python tools/bench_models.py
+  cheap: "nvidia/nemotron-3.5-lightning:free"         # аннотации, классификация (~97 tok/s)
+  medium: "nvidia/nemotron-3-super-120b-a12b:free"    # кластеризация, summary (~60 tok/s)
+  expensive: "nvidia/nemotron-3-ultra-550b-a55b:free" # синтез идей, глубокие спеки (~50 tok/s)
+  fallbacks:
+    cheap:
+      - "google/gemma-4-26b-a4b-it:free"
+      - "liquid/lfm-2.5-2.6b:free"
+    medium:
+      - "nvidia/nemotron-3.5-lightning:free"
+      - "google/gemma-4-26b-a4b-it:free"
+    expensive:
+      - "nvidia/nemotron-3-super-120b-a12b:free"
+      - "nvidia/nemotron-3.5-lightning:free"
+  max_tokens: 2000
+  # Потолок, а не цель: модель останавливается сама. Замеренная причина обрезки
+  # 2026-09-27 — JSON-экранирование съедает токены, и группа из 4 секций
+  # обрывалась на 5500-7100 символах при max_tokens=2000 (finish_reason=length,
+  # ends_with_brace=False). 3200 перекрывает эту длину; на free-пуле лимит
+  # ничего не стоит, пока он выше того, что модель пишет сама.
+  max_tokens_by_stage:
+    cheap: 700
+    medium: 1200
+    expensive: 3200
+  temperature:
+    cheap: 0.2
+    medium: 0.4
+    expensive: 0.6
+  # Бюджет LLM-стадии на один прогон: после исчерпания стадия пропускается,
+  # прогон продолжается, факт фиксируется в run_logs. Не даёт free-очередям
+  # висеть сутками.
+  budget_minutes:
+    synthesize: 20
+    spec: 45
 
 sources:
   github_trending: true
@@ -118,9 +154,11 @@ schedule:
   weekly_report: "mon 18:00"
 
 site:
-  base_url: "https://example.com"   # TODO: заменить на реальный URL (github.io/<repo> или домен) перед публикацией
+  # Включи Pages в настройках репо (Settings → Pages → Source: GitHub Actions),
+  # потом URL станет https://<user>.github.io/daily-vibe-coding-ideas-and-specs
+  base_url: "https://homgorn.github.io/daily-vibe-coding-ideas-and-specs"
   title: "Daily Vibe Coding Ideas & Specs"
   tagline: "Fresh vibe-coding product ideas every day, with viability scores and agent-ready specs."
   language: "en"
-  github_url: "https://github.com/daily-vibe-coding-ideas-and-specs"
+  github_url: "https://github.com/homgorn/daily-vibe-coding-ideas-and-specs"
   items_per_feed: 20

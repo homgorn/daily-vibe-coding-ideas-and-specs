@@ -16,14 +16,23 @@ import engine.publish.site as site_mod
 def _write_idea(src_dir: Path) -> None:
     ideas = src_dir / "ideas"
     ideas.mkdir(parents=True)
+    # The frontmatter must satisfy validation: build_site() refuses to render
+    # artifacts that fail any agent, so a half-filled fixture would be
+    # (correctly) dropped from the output.
     (ideas / "1_test_idea.md").write_text(
         "---\n"
         "title: Test idea\n"
-        "description: A test idea\n"
+        "description: A test idea with enough description text to pass the length rule.\n"
         "viability_score: 80\n"
+        "viability_confidence: 60\n"
+        "origin: research\n"
+        "date: 2026-01-01\n"
         "tags: [ai, tools]\n"
         "---\n\n"
-        "# Test idea\n\nBody text with [link](../index.html).\n",
+        "# Test idea\n\n"
+        "Body text with [link](../index.html).\n\n"
+        "## Problem\n\nA problem worth solving, cited [1](https://en.wikipedia.org/wiki/Thing).\n\n"
+        "## Cited Sources\n\n[1] Thing — https://en.wikipedia.org/wiki/Thing\n",
         encoding="utf-8",
     )
 

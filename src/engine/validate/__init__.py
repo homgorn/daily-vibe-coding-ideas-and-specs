@@ -1,7 +1,7 @@
 """Validation: 5 agents + SEO/GEO checker + link checker + legal check.
 
 Rule: publication without all green checks is impossible.
-Agents: data, text, image, video, post + seo_geo + links + legal.
+Agents: data, text, image, video, post + seo_geo + links + legal + generation.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ import urllib.error
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+
+from engine.spec import FALLBACK_MARKER as SPEC_FALLBACK_MARKER
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -382,6 +384,18 @@ def validate_artifact(filepath: str | Path, artifact_type: str = "idea",
     fm, body = parse_frontmatter(content)
 
     report = ValidationReport(str(filepath), artifact_type)
+
+    # Generation gate: an artifact the generator failed to fill in must never
+    # pass. Template filler reads exactly like a real spec on the surface, so
+    # without this check the pipeline happily publishes empty analysis.
+    if SPEC_FALLBACK_MARKER in content:
+        report.results.append(ValidationResult(
+            "generation", False, 0.0,
+            [
+                "Spec generation failed — body was never filled in "
+                f"({SPEC_FALLBACK_MARKER}). Regenerate before publishing."
+            ],
+        ))
 
     # 5 core agents
     report.results.append(check_data_agent(content, fm))

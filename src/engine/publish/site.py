@@ -210,6 +210,32 @@ def _article(entry: dict, kind: str, rel: str, site: dict) -> str:
     )
 
 
+def _filter_validated(entries: list[dict], artifact_type: str) -> tuple[list[dict], list[str]]:
+    """Drops artifacts that fail validation.
+
+    constitution.md §3: nothing is published before all validation agents are
+    green. Rendering an artifact here is publication, so the gate belongs at
+    this boundary rather than in the caller.
+    """
+    from engine.validate import validate_artifact
+
+    kept: list[dict] = []
+    dropped: list[str] = []
+    for entry in entries:
+        report = validate_artifact(entry["file"], artifact_type, check_links_online=False)
+        if report.passed:
+            kept.append(entry)
+        else:
+            reasons = [
+                err
+                for result in report.results
+                if not result.passed
+                for err in result.errors
+            ]
+            dropped.append(f"{entry['file'].name} [{'; '.join(reasons[:2])}]")
+    return kept, dropped
+
+
 def _load_entries(source_dir: Path, kind: str) -> list[dict]:
     entries = []
     d = source_dir / kind
@@ -402,6 +428,13 @@ def build_site(config: dict | None = None, source_dir: Path | None = None,
 
     ideas = _load_entries(source_dir, "ideas")
     specs = _load_entries(source_dir, "specs")
+
+    specs, spec_excluded = _filter_validated(specs, "spec")
+    ideas, idea_excluded = _filter_validated(ideas, "idea")
+    excluded_names = spec_excluded + idea_excluded
+    if excluded_names:
+        print(f"  excluded {len(excluded_names)} unvalidated: {excluded_names[:5]}")
+
     all_entries = ideas + specs
 
     # Article pages
@@ -509,5 +542,7 @@ def build_site(config: dict | None = None, source_dir: Path | None = None,
         "sitemap": True,
         "dashboard": copied_dash,
         "broken_links": broken,
+        "excluded": len(excluded_names),
+        "excluded_names": excluded_names,
         "kpi": kpi,
     }

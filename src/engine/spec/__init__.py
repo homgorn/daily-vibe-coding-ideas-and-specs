@@ -6,6 +6,7 @@ Generates hyper-detailed, agent-ready specs with launch commands for IDEs.
 from __future__ import annotations
 
 import json
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -97,6 +98,99 @@ def _clamp_title(title: str, limit: int = 70) -> str:
     return title[:limit - 3].rstrip() + "..."
 
 
+FALLBACK_MARKER = "<!-- spec-generation-failed -->"
+
+SPEC_SECTIONS: tuple[tuple[str, str], ...] = (
+    ("problem", "Problem"),
+    ("solution", "Solution"),
+    ("target_user", "Target User"),
+    ("features", "Key Features"),
+    ("tech_stack", "Tech Stack & Architecture"),
+    ("data_model", "Data Model"),
+    ("api", "API / Interfaces"),
+    ("ui_ux", "UI/UX Requirements"),
+    ("monetization", "Monetization"),
+    ("risks", "Risks & Mitigation"),
+    ("launch_checklist", "Launch Checklist"),
+    ("cited_sources", "Cited Sources"),
+)
+
+# Sections are requested in separate calls. Measured 2026-09-27 on
+# nvidia/nemotron-3-ultra-550b-a55b:free (tools/diagnose_truncation.py): all 12
+# sections in one request wants >9.7k completion tokens and still fails to
+# parse, whether it truncates (finish_reason=length) or not. Four sections
+# finish naturally at ~2.3k tokens and parse reliably. Smaller groups also
+# mean a lost call costs 4 sections instead of all 12.
+MAX_SECTIONS_PER_CALL = 4
+
+# A group that comes back truncated (measured: JSON escaping burns tokens, so a
+# 4-section group overruns a 2000-token cap) or that answers only some of its
+# keys is re-asked, narrowed to whatever is still missing. Bounded so a group
+# that never succeeds cannot spin.
+MAX_GROUP_ATTEMPTS = 2
+
+SPEC_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Problem and value", ("problem", "solution", "target_user", "features")),
+    ("Architecture", ("tech_stack", "data_model", "api", "ui_ux")),
+    ("Shipping", ("monetization", "risks", "launch_checklist", "cited_sources")),
+)
+
+
+def extract_json_object(text: str) -> dict | None:
+    """Достаёт JSON-объект из ответа модели.
+
+    Модели любят оборачивать JSON в ```json-блок, добавлять прозу
+    до/после и ломать формат. Здесь снимаем все эти обёртки, прежде чем
+    сдаваться на fallback.
+    """
+    if not text:
+        return None
+    candidate = text.strip()
+
+    fence = re.search(
+        r"```(?:json)?\s*(.+?)\s*```", candidate, re.DOTALL | re.IGNORECASE
+    )
+    if fence:
+        candidate = fence.group(1).strip()
+
+    try:
+        parsed = json.loads(candidate)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    start = candidate.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for idx in range(start, len(candidate)):
+        char = candidate[idx]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    parsed = json.loads(candidate[start : idx + 1])
+                except json.JSONDecodeError:
+                    return None
+                return parsed if isinstance(parsed, dict) else None
+    return None
+
+
 def generate_spec(idea: dict, cluster_items: list[dict]) -> str:
     viability = idea.get("viability", {})
     source_items = []
@@ -110,7 +204,7 @@ def generate_spec(idea: dict, cluster_items: list[dict]) -> str:
             "meta": meta,
         })
 
-    prompt = f"""Generate a HYPER-DETAILED, AGENT-READY SPEC for this idea.
+    prompt_head = f"""Generate a HYPER-DETAILED, AGENT-READY SPEC for this idea.
 
 ## Idea
 **Title**: {idea['title']}
@@ -120,48 +214,98 @@ def generate_spec(idea: dict, cluster_items: list[dict]) -> str:
 
 ## Source Materials (cite as [source:N])
 {json.dumps(source_items, ensure_ascii=False, indent=2)}
+"""
 
-## Required Output Format
-Return ONLY a JSON object with these Markdown string fields:
+    style = (
+        "Style: Spec Kit constitution structure + BMAD role depth "
+        "(Analyst/PM/Architect/Dev/QA). No fluff. MVP scope 2-4 weeks.\n"
+        "Return ONLY a JSON object, no prose before or after it."
+    )
 
-{{
-  "problem": "## Problem\\n\\nDetailed problem statement...",
-  "solution": "## Solution\\n\\nExact solution...",
-  "target_user": "## Target User\\n\\nPrimary persona...",
-  "features": "## Key Features\\n\\n1. **Feature** — description (P0/P1/P2)",
-  "tech_stack": "## Tech Stack & Architecture\\n\\nRecommended stack...",
-  "data_model": "## Data Model\\n\\nCore entities...",
-  "api": "## API / Interfaces\\n\\nKey endpoints...",
-  "ui_ux": "## UI/UX Requirements\\n\\nKey screens...",
-  "monetization": "## Monetization\\n\\nPricing model...",
-  "risks": "## Risks & Mitigation\\n\\n| Risk | Likelihood | Impact | Mitigation |...",
-  "launch_checklist": "## Launch Checklist\\n\\n1. [ ] Pre-launch...",
-  "cited_sources": "## Cited Sources\\n\\n[1] Title — URL"
-}}
+    grounding = (
+        "Grounding rules:\n"
+        "- Use ONLY the source materials above. Never invent statistics, dates, "
+        "quotes, versions, or URLs.\n"
+        "- If the sources do not support a claim, write that it is unknown "
+        "instead of guessing.\n"
+        "- Every factual claim cites a source as [source:N].\n"
+        "- cited_sources must list only URLs that appear in the source materials."
+    )
 
-Style: Spec Kit constitution structure + BMAD role depth (Analyst/PM/Architect/Dev/QA).
-Every claim from sources → [source:N]. No fluff. MVP scope 2-4 weeks."""
+    collected: dict[str, str] = {}
+    failures: list[str] = []
 
-    response = complete(prompt, stage="expensive")
-    try:
-        spec_data = json.loads(response.content)
-    except json.JSONDecodeError:
-        spec_data = _fallback_spec(idea)
+    for group_name, keys in SPEC_GROUPS:
+        outstanding = list(keys)
+        for attempt in range(MAX_GROUP_ATTEMPTS):
+            if not outstanding:
+                break
+            requested = {
+                key: f"## {heading}\\n\\n..."
+                for key, heading in SPEC_SECTIONS
+                if key in outstanding
+            }
+            prompt = (
+                f"{prompt_head}\n"
+                f"## Task\n"
+                f"Write ONLY these sections of the spec: {group_name}.\n\n"
+                f"## Required Output Format\n"
+                f"Return ONLY a JSON object with exactly these keys and no "
+                f"others: "
+                f"{', '.join(requested)}.\n"
+                f"Every key must be present. The JSON must be complete and "
+                f"closed.\n\n"
+                f"Example shape:\n"
+                f"{json.dumps(requested, indent=2, ensure_ascii=False)}\n\n"
+                f"Keep each section concise so the whole object fits in the "
+                f"response limit.\n"
+                f"{style}\n"
+                f"{grounding}"
+            )
+            try:
+                response = complete(prompt, stage="expensive")
+            except Exception as exc:  # noqa: BLE001
+                failures.append(f"{group_name}: {exc}")
+                break
+            payload = extract_json_object(response.content)
+            if not payload:
+                # Truncated or malformed: nothing recovered, so re-ask the
+                # whole outstanding set rather than silently dropping it.
+                failures.append(f"{group_name}: unparseable response (attempt {attempt + 1})")
+                continue
+            still_missing: list[str] = []
+            for key in outstanding:
+                value = str(payload.get(key, "")).strip()
+                if value:
+                    collected[key] = value
+                else:
+                    still_missing.append(key)
+            outstanding = still_missing
 
-    body = "\n\n".join([
-        spec_data.get("problem", "## Problem\n\nTBD"),
-        spec_data.get("solution", "## Solution\n\nTBD"),
-        spec_data.get("target_user", "## Target User\n\nTBD"),
-        spec_data.get("features", "## Key Features\n\nTBD"),
-        spec_data.get("tech_stack", "## Tech Stack & Architecture\n\nTBD"),
-        spec_data.get("data_model", "## Data Model\n\nTBD"),
-        spec_data.get("api", "## API / Interfaces\n\nTBD"),
-        spec_data.get("ui_ux", "## UI/UX Requirements\n\nTBD"),
-        spec_data.get("monetization", "## Monetization\n\nTBD"),
-        spec_data.get("risks", "## Risks & Mitigation\n\nTBD"),
-        spec_data.get("launch_checklist", "## Launch Checklist\n\nTBD"),
-        spec_data.get("cited_sources", "## Cited Sources\n\nTBD"),
-    ])
+        if outstanding:
+            failures.append(
+                f"{group_name}: no content for {', '.join(outstanding)}"
+            )
+
+    if not collected:
+        reasons = "; ".join(failures) if failures else "no sections returned"
+        body = (
+            f"{FALLBACK_MARKER}\n\n"
+            "> **This spec was not generated.** No section could be produced, so "
+            "nothing below is filled in. Nothing here may be published or treated "
+            f"as analysis. Cause: {reasons}"
+        )
+    else:
+        body = "\n\n".join(
+            collected.get(key, "").strip() or f"## {heading}\n\n(not provided by model)"
+            for key, heading in SPEC_SECTIONS
+        )
+        if failures:
+            body += (
+                "\n\n> *Partial spec: "
+                + "; ".join(failures)
+                + ". Sections that failed are marked above.*"
+            )
 
     return SPEC_TEMPLATE.format(
         title=_clamp_title(idea["title"]),
@@ -175,24 +319,6 @@ Every claim from sources → [source:N]. No fluff. MVP scope 2-4 weeks."""
         tags=", ".join(idea.get("tags", [])),
         body=body,
     )
-
-
-def _fallback_spec(idea: dict) -> dict:
-    s = idea.get("summary", "")
-    return {
-        "problem": f"## Problem\n\n{s}",
-        "solution": "## Solution\n\nSee summary above.",
-        "target_user": "## Target User\n\nDevelopers and builders.",
-        "features": "## Key Features\n\n1. Core feature (P0)",
-        "tech_stack": "## Tech Stack & Architecture\n\nPython + SQLite + Markdown.",
-        "data_model": "## Data Model\n\nSee plan.md.",
-        "api": "## API / Interfaces\n\nREST API.",
-        "ui_ux": "## UI/UX Requirements\n\nClean, fast, accessible.",
-        "monetization": "## Monetization\n\nFreemium.",
-        "risks": "## Risks & Mitigation\n\n| Risk | L | I | M |\n|---|---|---|---|\n| Market | M | M | Validate early |",
-        "launch_checklist": "## Launch Checklist\n\n1. [ ] Build MVP\n2. [ ] Test\n3. [ ] Launch",
-        "cited_sources": "## Cited Sources\n\nGenerated from fetched items.",
-    }
 
 
 def save_spec(conn, idea_id: int, spec_path: str) -> int:
@@ -219,12 +345,24 @@ def run_spec_generation(config: dict, idea_ids: list[int] | None = None) -> dict
         return {"specs": 0, "message": "No ideas to spec"}
 
     results = []
+    errors = []
+    skipped_budget = False
     for idea_id in idea_ids:
+        from engine.providers import get_provider
+
+        registry = get_provider(config)
+        if registry.budget_exhausted("spec"):
+            skipped_budget = True
+            break
         idea = load_idea(conn, idea_id)
         if not idea:
             continue
-        cluster_items = load_cluster_items(conn, idea_id)
-        spec_md = generate_spec(idea, cluster_items)
+        try:
+            cluster_items = load_cluster_items(conn, idea_id)
+            spec_md = generate_spec(idea, cluster_items)
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"idea_id": idea_id, "error": str(exc)[:300]})
+            continue
         spec_path = write_spec(
             idea_id, idea["title"], spec_md,
             idea.get("viability", {}), tags=idea.get("tags", []),
@@ -235,4 +373,9 @@ def run_spec_generation(config: dict, idea_ids: list[int] | None = None) -> dict
         conn.commit()
         results.append({"idea_id": idea_id, "spec_path": str(spec_path)})
 
-    return {"specs": len(results), "details": results}
+    out: dict = {"specs": len(results), "details": results}
+    if errors:
+        out["errors"] = errors
+    if skipped_budget:
+        out["skipped_budget"] = True
+    return out

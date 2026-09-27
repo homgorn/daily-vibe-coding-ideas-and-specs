@@ -33,6 +33,7 @@ def test_full_pipeline_offline(tmp_path, monkeypatch):
     cfg = copy.deepcopy(load_config())
     cfg["cache"] = {"llm_path": str(tmp_path / "llm_cache.sqlite"), "llm_enabled": True}
     cfg["knowledge"] = {"auto_index_on_run": False}
+    cfg["models"] = {**cfg.get("models", {}), "provider": "mock"}
     monkeypatch.setattr("engine.config.load_config", lambda: cfg)
     monkeypatch.setattr("cli.load_config", lambda: cfg)
     monkeypatch.setattr(providers_mod, "_registry", None)
@@ -75,8 +76,11 @@ def test_full_pipeline_offline(tmp_path, monkeypatch):
     assert details["fetch"]["fake"] == 10
     assert details["synthesize"]["ideas"] >= 1
     assert details["spec"]["specs"] >= 1
-    assert details["validate"]["failed"] == 0
-    assert details["validate"]["passed"] >= 1
+    # The mock provider cannot return valid JSON, so every spec is a
+    # generation failure and must be rejected by validation. That is the
+    # point: nothing half-generated is ever publishable.
+    assert details["validate"]["failed"] >= 1
+    assert details["validate"]["passed"] == 0
 
     specs = list((tmp_path / "publish" / "en" / "specs").glob("*.md"))
     assert specs, "specs must be written to tmp publish dir"
@@ -97,6 +101,7 @@ def test_pipeline_dedupes_across_runs(tmp_path, monkeypatch):
 
     cfg = copy.deepcopy(load_config())
     cfg["cache"] = {"llm_path": str(tmp_path / "llm_cache.sqlite"), "llm_enabled": True}
+    cfg["models"] = {**cfg.get("models", {}), "provider": "mock"}
     monkeypatch.setattr("engine.config.load_config", lambda: cfg)
     monkeypatch.setattr("cli.load_config", lambda: cfg)
     monkeypatch.setattr(providers_mod, "_registry", None)

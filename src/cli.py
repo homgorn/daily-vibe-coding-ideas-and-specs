@@ -98,10 +98,24 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _close_stale_runs(conn) -> int:
+    """Помечает прогоны, оставшиеся в 'running' (убитый процесс), как failed."""
+    cur = conn.execute(
+        "UPDATE run_logs SET finished_at = datetime('now'), status = 'failed', "
+        "details = COALESCE(details, '') || 'stale: process did not finish' "
+        "WHERE status = 'running' AND finished_at IS NULL"
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     conn = init_db()
     phase = "fetch"
     run_start = time.time()
+    stale = _close_stale_runs(conn)
+    if stale:
+        print(f"  закрыто висящих прогонов: {stale}")
     try:
         cur = conn.execute(
             "INSERT INTO run_logs (started_at, phase) VALUES (datetime('now'), ?)",
@@ -146,8 +160,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         # Phase 4: SYNTHESIZE
         print("\n[4/8] SYNTHESIZE...")
+        from engine.providers import get_provider
         from engine.synthesize import run_synthesis
 
+        registry = get_provider(cfg)
+        registry.start_budget("synthesize")
         synth_results = run_synthesis(cfg)
         results["synthesize"] = synth_results
         if "error" in synth_results:
@@ -160,9 +177,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("\n[5/8] SPEC...")
         from engine.spec import run_spec_generation
 
+        registry.start_budget("spec")
         spec_results = run_spec_generation(cfg)
         results["spec"] = spec_results
         print(f"  specs generated: {spec_results['specs']}")
+        spent = registry.budget_report()
+        if spent:
+            results["llm_budget_minutes"] = spent
+            print(f"  LLM time spent (min): {spent}")
         # Phase 6: VALIDATE
         print("\n[6/8] VALIDATE...")
         from engine.validate import validate_artifact
@@ -215,9 +237,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         results["site"] = {
             "pages": site_stats["pages"],
             "broken_links": len(site_stats["broken_links"]),
+            "excluded": site_stats.get("excluded", 0),
         }
         print(
-            f"  pages={site_stats['pages']}, broken_links={len(site_stats['broken_links'])}"
+            f"  pages={site_stats['pages']}, "
+            f"broken links={len(site_stats['broken_links'])}, "
+            f"excluded unvalidated={site_stats.get('excluded', 0)}"
         )
         # Update run log
         elapsed = time.time() - run_start
