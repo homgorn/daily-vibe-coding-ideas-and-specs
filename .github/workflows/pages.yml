@@ -10,10 +10,12 @@ permissions:
   pages: write
   id-token: write
 
-# Same group as GitHub's built-in Pages workflow, so a branch-based Jekyll
-# deployment and this one cannot fight over the same environment.
+# Deliberately NOT the "pages" group. GitHub's built-in "pages build and
+# deployment" workflow uses that group, and with cancel-in-progress on both,
+# whichever starts second cancels the other mid-run. Sharing the group was the
+# cause, not the prevention.
 concurrency:
-  group: pages
+  group: pages-custom
   cancel-in-progress: true
 
 jobs:
