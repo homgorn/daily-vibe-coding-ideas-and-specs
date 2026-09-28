@@ -10,6 +10,8 @@ permissions:
   pages: write
   id-token: write
 
+# Same group as GitHub's built-in Pages workflow, so a branch-based Jekyll
+# deployment and this one cannot fight over the same environment.
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -17,6 +19,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,15 +28,20 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Build static site
+        # build-site renders from the committed publish/en/ tree and applies the
+        # validation gate. It needs no secrets, so this step also works on a
+        # fork and in CI with no .env.
         run: python src/cli.py build-site
+      # v3 of this action is deprecated and fails on current runners.
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: site
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
